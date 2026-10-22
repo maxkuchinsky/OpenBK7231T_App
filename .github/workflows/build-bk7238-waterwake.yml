@@ -27,14 +27,7 @@ jobs:
           head='#include "manual_ps_pub.h"'
           include='#include "sys_ctrl_pub.h"'
           anchor='\tparams.gpio_edge_map = g_gpio_edge_map[0];'
-          snippet='''\n#if PLATFORM_BK7238
-              /* EXPERIMENTAL: let P17 retain its external bias during sleep. */
-              if (params.gpio_index_map & (1UL << 17)) {
-                  sctrl_set_deep_sleep_gpio_floating_map(1UL << 17);
-              }
-#endif'''
-          import textwrap
-          snippet=textwrap.dedent(snippet)
+          snippet = "\\n#if PLATFORM_BK7238\\nif (params.gpio_index_map & (1UL << 17)) {\\n    sctrl_set_deep_sleep_gpio_floating_map(1UL << 17);\\n}\\n#endif"
           if s.count(head)!=1 or s.count(anchor)!=1 or include in s:
               raise SystemExit("Source layout mismatch; refusing unpatched build")
           s=s.replace(head,head+"\n#if PLATFORM_BK7238\n"+include+"\n#endif",1)
