@@ -1,0 +1,67 @@
+name: Build BK7238 Water Wake EXPERIMENTAL OTA
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-bk7238-waterwake.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bk7238-waterwake:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply experimental patch with checks
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          f=Path("src/new_pins.c")
+          s=f.read_text()
+          head='#include "manual_ps_pub.h"'
+          include='#include "sys_ctrl_pub.h"'
+          anchor='\tparams.gpio_edge_map = g_gpio_edge_map[0];'
+          snippet='''\n#if PLATFORM_BK7238
+              /* EXPERIMENTAL: let P17 retain its external bias during sleep. */
+              if (params.gpio_index_map & (1UL << 17)) {
+                  sctrl_set_deep_sleep_gpio_floating_map(1UL << 17);
+              }
+#endif'''
+          import textwrap
+          snippet=textwrap.dedent(snippet)
+          if s.count(head)!=1 or s.count(anchor)!=1 or include in s:
+              raise SystemExit("Source layout mismatch; refusing unpatched build")
+          s=s.replace(head,head+"\n#if PLATFORM_BK7238\n"+include+"\n#endif",1)
+          s=s.replace(anchor,anchor+snippet,1)
+          f.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/new_pins.c
+
+      - name: Compile OpenBK7238 and OTA RBL
+        run: make APP_NAME=OpenBK7238 APP_VERSION=waterwake_exp_001 VARIANT=default OpenBK7238
+
+      - name: Validate and stage OTA output
+        shell: bash
+        run: |
+          set -euo pipefail
+          RBL=output/waterwake_exp_001/OpenBK7238_waterwake_exp_001.rbl
+          test -f "$RBL"
+          test "$(stat -c%s "$RBL")" -gt 65536
+          mkdir -p ota-artifacts
+          cp "$RBL" ota-artifacts/
+          (cd ota-artifacts && sha256sum *.rbl > SHA256SUMS.txt)
+          echo "Experimental and NOT tested on actual water sensor. Preserve UART recovery." > ota-artifacts/README_FIRST.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BK7238-WaterWake-EXPERIMENTAL-OTA
+          path: ota-artifacts/
+          if-no-files-found: error
