@@ -1,0 +1,70 @@
+name: Build BK7238 Water Wake EXPERIMENTAL OTA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout OpenBeken source
+        uses: actions/checkout@v4
+
+      - name: Apply experimental BK7238 GPIO17 wake patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          f = Path('src/new_pins.c')
+          s = f.read_text()
+          anchor = '''\tparams.gpio_edge_map = g_gpio_edge_map[0];\n'''
+          snippet = '''#if PLATFORM_BK7238
+          /* EXPERIMENTAL: do not force GPIO17 pulldown in deep sleep.
+             Only apply if GPIO17 is configured as a wake input. */
+          if (params.gpio_index_map & (1UL << 17)) {
+              sctrl_set_deep_sleep_gpio_floating_map(1UL << 17);
+          }
+          #endif
+          '''
+          if s.count(anchor) != 1:
+              raise SystemExit('Source layout differs; patch NOT applied')
+          # Deliberately dedent the snippet to place preprocessor directives at column zero
+          import textwrap
+          f.write_text(s.replace(anchor, anchor + textwrap.dedent(snippet)))
+          print('Patched src/new_pins.c')
+          PY
+          git diff --check
+          git diff -- src/new_pins.c
+
+      - name: Build only OpenBK7238 default (includes SDK and OTA packaging)
+        run: make APP_NAME=OpenBK7238 APP_VERSION=waterwake_test VARIANT=default OpenBK7238
+
+      - name: Locate and validate OTA artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ota-artifacts
+          find output -type f -name '*.rbl' -print
+          mapfile -t RBL < <(find output -type f -name 'OpenBK7238*.rbl')
+          if [ "${#RBL[@]}" -eq 0 ]; then
+            echo 'ERROR: no OpenBK7238 OTA RBL created' >&2
+            exit 1
+          fi
+          for f in "${RBL[@]}"; do
+            test "$(stat -c%s "$f")" -gt 65536
+            cp "$f" ota-artifacts/
+            sha256sum "$f" >> ota-artifacts/SHA256SUMS.txt
+          done
+          printf '%s\n' 'EXPERIMENTAL UNVERIFIED DEVICE BEHAVIOR; do not use as sole flood protection.' > ota-artifacts/README_FIRST.txt
+
+      - name: Upload RBL files to Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BK7238-WaterWake-EXPERIMENTAL-OTA
+          path: ota-artifacts/
+          if-no-files-found: error
+          retention-days: 14
